@@ -32,6 +32,8 @@
 #define MAX_MODULE_NAME_SIZE 256
 #define MAX_MODULE_SUBFIELDS  24 
 
+#define MAX_RECORD_LENGTH    512
+
 #define TIMEFMT   "%Y/%m/%d:%H:%M:%S"
 #define RECORDFMT "%t %I[%l] %N%m"
 
@@ -120,8 +122,8 @@ class Logger {
     static bool set_autolog(bool mode);
     // Formatting
     static std::string format_tid();
-    static void format_pid(std::string& pidstr);
-    static void format_ppid(std::string& ppidstr);
+    static std::string format_pid();
+    static std::string format_ppid();
     static void format_time(std::string& timestr, const char* timefmt);
     static void format_message(std::string& msgstr,
                                const char* msgfmt, va_list vl);

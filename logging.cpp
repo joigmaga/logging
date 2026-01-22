@@ -530,13 +530,15 @@ void Logger::set_timefmt(const string& timefmt) {
   timeformat = timefmt;
 }
   
-//void Logger::get_recfmt(const string& recfmt) {
-//  // get the time format for ths logger (safe)
-//  //
-//  lock_guard<mutex> lock(logspace::logmutex);
-//
-//  return recordformat;
-//}
+/*
+void Logger::get_recfmt(const string& recfmt) {
+  // get the time format for ths logger (safe)
+  //
+  lock_guard<mutex> lock(logspace::logmutex);
+
+  return recordformat;
+}
+*/
   
 void Logger::set_recfmt(const string& recfmt) {
   // set the time format for ths logger (safe)
@@ -558,48 +560,6 @@ string Logger::level_to_string(int level, bool uppercase) {
   }
 }
 
-void Logger::logrecord(string& record,
-                       const char* timefmt,
-                       const char* recfmt,
-                       string& message,
-                       string& name, int level) {
-
-  // Create a logging record
-  //
-  //   Get current timestamp
-  //
-  char timestamp[32];
-  time_t now = time(0);
-  tm* timeinfo = localtime(&now);
-  if (strftime(timestamp, sizeof(timestamp), timefmt, timeinfo) == 0)
-    strncpy(timestamp, "time fmt error", sizeof(timestamp));
-    
-  string msep;
-  if (name.size() > 0)
-    msep = ": ";
-
-  char tids[64];
-  tids[0] = '\0';
-  thread::id tid = this_thread::get_id();
-  if (tid != logspace::main_thread_id)
-    snprintf(tids, sizeof(tids), "(%x) ",
-             (unsigned int) hash<thread::id>()(this_thread::get_id()));
-
-  // the final record formatting
-  //
-  char entry[256];
-  if (snprintf(entry, sizeof(entry), "%s %s[%s] %s%s%s",
-        timestamp,
-        tids,
-        level_to_string(level).c_str(),
-        name.c_str(),
-        msep.c_str(),
-        message.c_str()) < 0)
-    snprintf(entry, sizeof(entry), "logging error: %s", strerror(errno));
-    
-  record = string(entry);
-}  
-
 string Logger::format_tid() {
   // Thread id formatting
   //
@@ -612,7 +572,7 @@ string Logger::format_tid() {
   return string(tids);
 }
 
-void Logger::format_pid(string& pidstr) {
+string Logger::format_pid() {
   // pid formatting
   //
   char pids[64];
@@ -620,10 +580,10 @@ void Logger::format_pid(string& pidstr) {
 
   snprintf(pids, sizeof(pids), "%i", getpid());
 
-  pidstr = string(pids);
+  return string(pids);
 }
 
-void Logger::format_ppid(string& ppidstr) {
+string Logger::format_ppid() {
   // Parent pid formatting
   //
   char ppids[64];
@@ -631,7 +591,7 @@ void Logger::format_ppid(string& ppidstr) {
 
   snprintf(ppids, sizeof(ppids), "%i", getppid());
 
-  ppidstr = string(ppids);
+  return string(ppids);
 }
 
 void Logger::format_time(string& timestr, const char* timefmt) {
@@ -664,72 +624,84 @@ void Logger::format_record(string& record,
                            const char* recfmt,
                            string& message,
                            string& name, int level) {
-
+  //
   string timestamp;
   format_time(timestamp, timefmt);
   string format = recfmt;
 
   // the final record formatting
   //
+  auto s_append = [](string& r, const string& s, size_t max) {
+                                if (r.size() > max)
+                                  r.resize(max);
+                                else if (r.size() < max)
+                                  r += s.substr(0, max - r.size()); };
+  auto c_append = [](string& r, const char c) { if (r.size() < 4)
+                                                  r += c; };
   string pending;
 
   size_t i = 0;
   while(i < format.size()) {
     char c = format[i++];
+    c_append(pending, c);
 
-    record += pending;
-    pending.clear();
-
-    pending += c;
-    if (c != '%')
+    if (i >= format.size() or c != '%') {
+      s_append(record, pending, MAX_RECORD_LENGTH);
+      pending.clear();
       continue;
+    }
 
     c = format[i++];
-    pending += c;
+    c_append(pending, c);
+
     bool append_colon = false;
-    bool uppercase = false;
+    bool uppercase    = false;
+
     switch(c) {
       case 't':
       case 'T':
-                 record += timestamp;
-                 pending.clear();
+                 s_append(record, timestamp, MAX_RECORD_LENGTH);
                  break;
       case 'N':  
                  if (name.size() > 0)
                    append_colon = true; 
       case 'n':
-                 record += name; 
+                 s_append(record, name, MAX_RECORD_LENGTH);
                  if (append_colon)
                    record += ": ";
-                 pending.clear();
                  break;
       case 'I':
                  if (this_thread::get_id() != logspace::main_thread_id)
-                   record += "(" + format_tid() + ") ";
-                 pending.clear();
+                   s_append(record, "(" + format_tid() + ") ", MAX_RECORD_LENGTH);
                  break;
       case 'i':
-                 record += format_tid();
-                 pending.clear();
+                 s_append(record, format_tid(), MAX_RECORD_LENGTH);
+                 break;
+      case 'P':
+                 s_append(record, format_ppid(), MAX_RECORD_LENGTH);
+                 break;
+      case 'p':
+                 s_append(record, format_pid(), MAX_RECORD_LENGTH);
                  break;
       case 'L':
                  uppercase = true;
       case 'l':
-                 record += level_to_string(level, uppercase);
-                 pending.clear();
+                 s_append(record, level_to_string(level, uppercase), MAX_RECORD_LENGTH);
                  break;
       case 'M':
       case 'm':
-                 record += message;
-                 pending.clear();
+                 s_append(record, message, MAX_RECORD_LENGTH);
                  break;
       case '%':
-                 record += '%';
-                 pending.clear();
+                 s_append(record, "%", MAX_RECORD_LENGTH);
                  break;                 
+      default:
+                 s_append(record, pending, MAX_RECORD_LENGTH);
+                 break;
     }
+    pending.clear();
   }
-  record += pending;
+  s_append(record, pending, MAX_RECORD_LENGTH);
 }    
 
 void Logger::logaux(int level, const char* format, va_list vl) {
