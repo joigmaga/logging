@@ -1,0 +1,165 @@
+/*
+A basic logging interface
+
+    Ignacio Martinez (igmartin@movistar.es)
+    January 2023
+
+*/
+
+///////////////////////////// A basic logging facility 
+//
+///////////// Introduction to the user interface
+//
+// Access to all interface methods through a reference to
+// the Logger and Formatter classes
+//
+//   Logger& logger = Logger::get_logger("name")  // logger for entitity "name" 
+//
+//   or using existing type   "typedef logref_t Logger&"
+//
+//   logref_t logger = Logger::get_logger("name")
+//
+///////////// Logger class
+//
+// Logger instances are dynamic objects built internally using smart pointers
+// for efficient memory management
+// Formatter instances are member of the Logger class and are responsible for
+// the final output aspect of logging records
+//
+// Logger and Formatter clases offer a reference based user interface
+// Module duration is tied to storage duration of the returned (smart) pointer
+// Loggers get instantiated using a factory function (get_logger(module))
+// Loggers form a hierarchy. There is a 'root' Logger that gets instantiated
+// automatically and can be modified using the empty string ("") as module name.
+// Once a logger is out of scope, the object pointed to is destroyed and the
+// instance tree is rebuilt
+//
+// User interface
+//
+//   logger creation:
+//
+//     Logger& logger = Logger::get_logger(const string& name,
+//                                         int level,      // optional         
+//                                         int streamer)   // optional
+//
+//         - the special value "" for name specifies the root logger
+//         - level is the log level and can be one of:
+//               NOTSET, DEBUG, INFO, WARNING, ERROR, CRITICAL, UNCHANGED
+//           the special value of NOTSET prevents any logging output
+//           the special value of UNCHANGED does not alter the current setting 
+//         - streamer opens an output stream for the logger and can be one of:
+//               STDOUT, STDERR, STDLOG, DEVNULL
+//
+//  formatter creation:
+//
+//    Formatter& formatter = Formatter::get_formatter(
+//                             const string& recfmt,    // optional
+//                             const string& timefmt,   // optional
+//                             bool eol)                // optional
+//
+//         - recfmt is the record format. Expansions include:
+//                 default value is "%t %I[%l] %N%m"   (DEFAULT_RECORDFMT)
+//                     %t -- time format (see below)
+//                     %i -- thread id (hash value)
+//                     %I -- skip if main thread otherwise enclose in "()"
+//                     %l -- log level as a lowercase string
+//                     %L -- log level as an uppercase string
+//                     %N -- logger name folowed by ": " if not empty
+//                     %n -- logger name
+//                     %m -- log message
+//         - timefmt is the time format. Uses the strftime(3) expansions
+//                 default value is "%Y/%m/%d:%H:%M:%S" (DEFAULT_TIMEFMT)
+//         - eol is a flag that enables/inhibits the output of a final LF
+//                 default value is 'true'
+//
+//  public logger methods:
+//
+//    - Factory functions for instatiating the class
+//        static logref_t Logger::get_logger(const string& module,
+//                          int level=UNCHANGED, int stream=UNCHANGED)
+//    - Naming
+//        void Logger::set_alias(const string& module)
+//    - Formatter handling
+//        fmtref_t Logger::get_formatter()
+//        void Logger::set_formatter(fmtref_t ref_formatter)
+//    - Message dispatch
+//        void Logger::log(int level, const char* format, ...)
+//        void Logger::autolog(int level, const char* format, ...)
+//        void Logger::critical(const char* format, ...)
+//        void Logger::error(const char* format, ...)
+//        void Logger::warning(const char* format, ...)
+//        void Logger::info(const char* format, ...)
+//        void Logger::debug(const char* format, ...)
+//    - Get/set current log level
+//        int Logger::get_loglevel()
+//        int Logger::set_loglevel(int level)
+//    - Select log file and streamer
+//        int Logger::set_logfile(const string& fname)
+//        ostream* Logger::get_streamer()
+//        ostream* Logger::set_streamer(int streamval)
+//        ostream* Logger::set_streamer(ostream* streamer)
+//    - Control tree navigation
+//        bool Logger::set_propagation(bool mode)
+//    - Auto log
+//        static bool Logger::get_autolog()
+//        static bool Logger::set_autolog(bool mode)
+//
+//  public logger methods:
+//
+//    - Factory functions for instantiating the class
+//        static fmtref_t Formatter::get_formatter(
+//                                  const string& recfmt = DEFAULT_RECORDFMT,
+//                                  const string& timefmt = DEFAULT_TIMEFMT,
+//                                  bool eol = true)
+//
+//    - Formatter settings
+//        void Formatter::set_timefmt(const string& timefmt)
+//        void Formatter::set_recfmt(const string& recfmt)
+//        void Formatter::set_eol(const bool eol)
+//
+//  one can create logger hierarchies using names separated by '.'
+//
+//      logref_t logger = Logger::get_logger("myapp", WARNING, STDLOG);
+//      logref_t logger = Logger::get_logger("myapp.util", DEBUG, STDERR);
+//
+//  in such a case, records created by 'myapp.util' will be logged at
+//  'myapp.util' and 'myapp' level, with the corresponding level and stream
+//  settings, while 'myapp' will use only the 'myapp' logger.
+//  This can be further controlled by 'propagation' setting in the logger
+//      
+//  usage:
+//
+//    using default formatting
+//
+//      logref_t logger = Logger::get_logger("myapp", WARNING, STDLOG);
+//      logger.log(ERROR, "I have a strong pain in my %s", "head");
+//      
+//    using a specific formatter
+//
+//      logref_t logger = Logger::get_logger("myapp", WARNING, STDLOG);
+//      fmtref_t formatter = Formatter::get_formatter("%t (%i) [%l] %n %m");
+//      logger.set_formatter(formatter);
+//      logger.log(ERROR, "I have a strong pain in my %s", "head");
+//
+///////////// logspace namespace
+//
+// Non-local variables are kept in a separate namespace (logspace)
+// Those include the main thread of execution and various mutexes
+//
+//   Identifies the default thread of execution
+//   Must get initialized before any thread is launched
+//
+//     logspace::main_thread_id = this_thread::get_id()
+//
+//   Flag to allow debugging of internal operations using regular loggers
+//
+//     logspace::autolog
+//
+//   Mutexes are placed in a separate namespace
+//   Must last until other dynamic objects are destroyed
+//
+//     logspace::treemutex   protect logger tree operations
+//     logspace::filemutex   protect file and stream operations
+//     logspace::logmutex    protect message creation and delivery
+//     logspace::fmtmutex    protect formatter creation and manipulation
+//

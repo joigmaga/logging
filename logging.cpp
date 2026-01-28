@@ -6,12 +6,9 @@ A basic logging interface
 
 */
 
-#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include <thread>
-#include <ctime>
 #include <cstdarg>
 #include <fstream>
 #include <iostream>
@@ -42,12 +39,13 @@ using namespace std;
 //     logspace::treemutex   protect logger tree operations
 //     logspace::filemutex   protect file and stream operations
 //     logspace::logmutex    protect message creation and delivery
+//     logspace::fmtmutex    protect formatter creation and manipulation
 
 ///////////// Interface
 //
-// Access to all interface methods through a reference to the Logger class
+// Access to all interface methods through a reference to
+// the Logger and Formatter classes
 //
-//   Logger& logger = Logger::get_logger()        // root_logger
 //   Logger& logger = Logger::get_logger("name")  // logger for entitity "name" 
 //
 //   or using existing type   "typedef logref_t Logger&"
@@ -56,59 +54,152 @@ using namespace std;
 //
 ///////////// Logger class
 //
-// Logger instances are dynamic objects pointed to by smart pointers 
-// Offers a reference based user interface
+// Logger instances are dynamic objects built internally using smart pointers
+// for efficient memory management
+// Formatter instances are member of the Logger class and are responsible for
+// the final output aspect of logging records
+//
+// Logger and Formatter clases offer a reference based user interface
 // Module duration is tied to storage duration of the returned (smart) pointer
 // Loggers get instantiated using a factory function (get_logger(module))
 // Loggers form a hierarchy. There is a 'root' Logger that gets instantiated
-// using get_logger(), which invokes an especial constructor
-// All calls to get_logger() for the same module return the same instance 
+// automatically and can be modified using the empty string ("") as module name.
 // Once a logger is out of scope, the object pointed to is destroyed and the
 // instance tree is rebuilt
 //
-
-// Logger class methods
+// User interface
 //
-// root Logger constructor (default)
-// note that "" as a name is meaningless and only intended for visual purposes
-// It could be used as a name by any non-root Logger eventually
+//   logger creation:
 //
-Logger::Logger() : modname(""),
-                   loglevel(WARNING),
-                   outstream(nullptr),
-                   timeformat(TIMEFMT),                   
-                   recordformat(RECORDFMT),                   
-                   propagate(false),
-                   parent(nullptr)      { };
+//     Logger& logger = Logger::get_logger(const string& name,
+//                                         int level,      // optional         
+//                                         int streamer)   // optional
+//
+//         - the special value "" for name specifies the root logger
+//         - level is the log level and can be one of:
+//               NOTSET, DEBUG, INFO, WARNING, ERROR, CRITICAL, UNCHANGED
+//           the special value of NOTSET prevents any logging output
+//           the special value of UNCHANGED does not alter the current setting 
+//         - streamer opens an output stream for the logger and can be one of:
+//               STDOUT, STDERR, STDLOG, DEVNULL
+//
+//  formatter creation:
+//
+//    Formatter& formatter = Formatter::get_formatter(
+//                             const string& recfmt,    // optional
+//                             const string& timefmt,   // optional
+//                             bool eol)                // optional
+//
+//         - recfmt is the record format. Expansions include:
+//                 default value is "%t %I[%l] %N%m"   (DEFAULT_RECORDFMT)
+//                     %t -- time format (see below)
+//                     %i -- thread id (hash value)
+//                     %I -- skip if main thread otherwise enclose in "()"
+//                     %l -- log level as a lowercase string
+//                     %L -- log level as an uppercase string
+//                     %N -- logger name folowed by ": " if not empty
+//                     %n -- logger name
+//                     %m -- log message
+//         - timefmt is the time format. Uses the strftime(3) expansions
+//                 default value is "%Y/%m/%d:%H:%M:%S" (DEFAULT_TIMEFMT)
+//         - eol is a flag that enables/inhibits the output of a final LF
+//                 default value is 'true'
+//
+//  public logger methods:
+//
+//    - Factory functions for instatiating the class
+//        static logref_t Logger::get_logger(const string& module,
+//                          int level=UNCHANGED, int stream=UNCHANGED)
+//    - Naming
+//        void Logger::set_alias(const string& module)
+//    - Formatter handling
+//        fmtref_t Logger::get_formatter()
+//        void Logger::set_formatter(fmtref_t ref_formatter)
+//    - Message dispatch
+//        void Logger::log(int level, const char* format, ...)
+//        void Logger::autolog(int level, const char* format, ...)
+//        void Logger::critical(const char* format, ...)
+//        void Logger::error(const char* format, ...)
+//        void Logger::warning(const char* format, ...)
+//        void Logger::info(const char* format, ...)
+//        void Logger::debug(const char* format, ...)
+//    - Get/set current log level
+//        int Logger::get_loglevel()
+//        int Logger::set_loglevel(int level)
+//    - Select log file and streamer
+//        int Logger::set_logfile(const string& fname)
+//        ostream* Logger::get_streamer()
+//        ostream* Logger::set_streamer(int streamval)
+//        ostream* Logger::set_streamer(ostream* streamer)
+//    - Control tree navigation
+//        bool Logger::set_propagation(bool mode)
+//    - Auto log
+//        static bool Logger::get_autolog()
+//        static bool Logger::set_autolog(bool mode)
+//
+//  public logger methods:
+//
+//    - Factory functions for instantiating the class
+//        static fmtref_t Formatter::get_formatter(
+//                                  const string& recfmt = DEFAULT_RECORDFMT,
+//                                  const string& timefmt = DEFAULT_TIMEFMT,
+//                                  bool eol = true)
+//
+//    - Formatter settings
+//        void Formatter::set_timefmt(const string& timefmt)
+//        void Formatter::set_recfmt(const string& recfmt)
+//        void Formatter::set_eol(const bool eol)
+//
+//  one can create logger hierarchies using names separated by '.'
+//
+//      logref_t logger = Logger::get_logger("myapp", WARNING, STDLOG);
+//      logref_t logger = Logger::get_logger("myapp.util", DEBUG, STDERR);
+//
+//  in such a case, records created by 'myapp.util' will be logged at
+//  'myapp.util' and 'myapp' level, with the corresponding level and stream
+//  settings, while 'myapp' will use only the 'myapp' logger.
+//  This can be further controlled by 'propagation' setting in the logger
+//      
+//  usage:
+//
+//    using default formatting
+//
+//      logref_t logger = Logger::get_logger("myapp", WARNING, STDLOG);
+//      logger.log(ERROR, "I have a strong pain in my %s", "head");
+//      
+//    using a specific formatter
+//
+//      logref_t logger = Logger::get_logger("myapp", WARNING, STDLOG);
+//      fmtref_t formatter = Formatter::get_formatter("%t (%i) [%l] %n %m");
+//      logger.set_formatter(formatter);
+//      logger.log(ERROR, "I have a strong pain in my %s", "head");
 
-// non-root Logger constructor
+///////////////  Logger class methods
+//
+// Logger constructor
 //
 Logger::Logger(const string& module) : modname(module),
+                                       alias(module),
                                        loglevel(NOTSET),
                                        outstream(nullptr),
-                                       timeformat(TIMEFMT),                   
-                                       recordformat(RECORDFMT),                   
+                                       formatter(nullptr),
                                        propagate(true),
-                                       parent(nullptr)      { };
+                                       parent(nullptr)       {}
 
 // Destructor. Update loggers tree and close log file
 //
 Logger::~Logger() {
   logptr_t temp_ptr = nullptr;    // delay parent destruction
-  string   module   = modname;    // allow for a different root module name
   bool     destok   = true;       // check for errors during destruction
 
   lock_guard<mutex> lock(logspace::treemutex);
   
-  if (not parent)
-    module = "root";
-
-  autolog(DEBUG, "destroying %s logging module", module.c_str());
+  autolog(DEBUG, "destroying %s logging module", alias.c_str());
 
   if (dict.size() > 0) {
     // tree cleanup error. Object with active children is being destructed
     //
-    autolog(ERROR, "logging module %s destroyed with active leaves", module.c_str());
+    autolog(ERROR, "logging module %s destroyed with active leaves", alias.c_str());
     // don't throw within destructor
     //
     destok = false;
@@ -148,13 +239,13 @@ Logger::~Logger() {
     }
   }
   if (destok)
-    autolog(DEBUG, "%s logging module destructed", module.c_str());
+    autolog(DEBUG, "%s logging module destructed", alias.c_str());
 }
 
 // Factories for root and regular loggers
 //
-logptr_t Logger::_get_logger() {
-// *** Used exclusively for creating the root instance ***
+logptr_t Logger::get_root_logger() {
+// *** Used internally and exclusively for creating the root instance ***
 // Instance gets created and initialized the first time this method is called
 // The root instance is unique. This method always returns the same pointer
 //
@@ -163,15 +254,25 @@ logptr_t Logger::_get_logger() {
   lock_guard<mutex> lock(logspace::treemutex);
 
   if (not root_logger) {
-    logptr_t temp_root_logger(new Logger);
+    // create the root logger and its associated default formatter
+    //
+    logptr_t temp_root_logger(new Logger(""));
+    fmtptr_t def_formatter(new Formatter);
+    // add a weak pointer to itself in the formatter so it can
+    // resolve back from reference to pointer
+    //
+    def_formatter->fmtptr = def_formatter;
 
     temp_root_logger.swap(root_logger);
+
+    root_logger->set_formatter_ptr(def_formatter);
+    root_logger->set_alias(ROOT_ALIAS);
   }
 
   return root_logger;
 }
 
-logptr_t Logger::_get_logger(const string& module) {
+logptr_t Logger::get_regular_logger(const string& module) {
   // walk down the logging tree looking for a module match
   //
   size_t dotpos = 0;               // position of '.' character in name
@@ -180,22 +281,23 @@ logptr_t Logger::_get_logger(const string& module) {
   const size_t max_submod = MAX_MODULE_SUBFIELDS;
   const size_t max_modlen = MAX_MODULE_NAME_SIZE;
 
-  // //logptr_t instance = nullptr;
-  // //
-  // //lock_guard<mutex> lock(logspace::treemutex);
-  // //
-  // //instance = _get_logger();         // this is the root instance
-
-  logptr_t instance = _get_logger();         // this is the root instance
-
-  lock_guard<mutex> lock(logspace::treemutex);
+  // locked (treemutex)
+  //
+  logptr_t instance = get_root_logger();        // this is the root instance
 
   if (module.size() > max_modlen) {
     // Too long for a module name. Resize and log error
-    instance->error("exceeded maximum length (%d) for module name %s...",
+    instance->autolog(ERROR,
+                      "exceeded maximum length (%d) for module name %s...",
                       max_modlen, module.substr(0, max_modlen).c_str());
     exit(1);
   }
+
+  lock_guard<mutex> lock(logspace::treemutex);
+
+  // get default formatter pointer
+  //
+  fmtptr_t def_formatter = instance->get_formatter_ptr();
 
   while(instance) {
     // find a module name token ('.' separated)
@@ -205,7 +307,8 @@ logptr_t Logger::_get_logger(const string& module) {
 
     if (++exit_loop > max_submod) {
       // too many submodules. Don't do any more searching
-      instance->error("max number of module subfields (%d) exceeded for %s",
+      instance->autolog(ERROR,
+                        "max number of module subfields (%d) exceeded for %s",
                         max_submod, module.c_str());
       exit(1);
     }
@@ -245,9 +348,11 @@ logptr_t Logger::_get_logger(const string& module) {
                           "created new logging instance for module %s at %p",
                           submod.c_str(), new_instance.get());
 
-      instance->dict[submod] = new_instance;   // store as weak pointer
-      new_instance->parent = instance;         // upwards pointer
-      instance = new_instance;                 // instance refcount++
+      instance->dict[submod]  = new_instance;   // store as weak pointer
+      new_instance->set_formatter_ptr(def_formatter);
+                                                // use default formatter
+      new_instance->parent    = instance;       // upwards pointer
+      instance = new_instance;                  // instance refcount++
     }
 
     if (pos == string::npos)                   // end of string reached
@@ -262,28 +367,69 @@ logptr_t Logger::_get_logger(const string& module) {
   return instance;
 }
 
-///////////////// User interface - logger creation /////////////////////
+// Simple routines to get safe formatter pointer manipulation
 //
-// Factories for root and regular loggers
-//
-logref_t Logger::get_logger(int level, int stream) {
-  //
-  logptr_t root_logger = _get_logger();
+fmtptr_t Logger::get_formatter_ptr() {
 
-  root_logger->set_loglevel(level);
-  root_logger->set_streamer(stream);
+  lock_guard<mutex> lock(logspace::fmtmutex);
 
-  return *(root_logger.get());
+  return formatter;
 }
 
+void Logger::set_formatter_ptr(fmtptr_t formatter_ptr) {
+
+  lock_guard<mutex> lock(logspace::fmtmutex);
+
+  formatter = formatter_ptr;
+}
+
+///////////////// User interface - logger creation /////////////////////
+//
+// Logger factory
+//
 logref_t Logger::get_logger(const string& module, int level, int stream) {
   //
-  logptr_t instance = _get_logger(module);
+  logptr_t instance;
+
+  if (module.empty())
+    instance = get_root_logger();
+  else
+    instance = get_regular_logger(module);
 
   instance->set_loglevel(level);
   instance->set_streamer(stream);
 
   return *(instance.get());
+}
+
+///////////////// User interface - Attach/inspect formatter /////////////////////
+//
+// These routines are user facing and provide a formatter reference interface
+//
+void Logger::set_formatter(fmtref_t ref_formatter) {
+  // attach a new formatter to this logger
+  //
+  lock_guard<mutex> lock(logspace::fmtmutex);
+
+  if (ref_formatter.fmtptr.expired()) {
+    autolog(ERROR, "formatter destructed while reference still in scope");
+    exit(1);
+  }
+
+  formatter = ref_formatter.fmtptr.lock();
+}
+ 
+fmtref_t Logger::get_formatter() {
+  // return reference to current formatter
+  //
+  lock_guard<mutex> lock(logspace::fmtmutex);
+
+  return *(formatter.get());
+}
+
+void Logger::set_alias(const string& new_alias) {
+
+  alias = new_alias;
 }
 
 ///////////// Logger parameter getting/setting /////////////////
@@ -338,6 +484,8 @@ bool Logger::set_autolog(bool mode) {
   return curdebug;
 }
 
+////////////  Logging output. Files and output streams
+//
 // Configure the log file for a logger (safe)
 //
 int Logger::set_logfile(const string& fname) {
@@ -510,201 +658,8 @@ void Logger::autolog(int level, const char* format, ...) {
   va_end(vl);
 }
 
-/////////////// The formatting part ///////////////////////
-
-// Parse the message part using format and variable parameter list
-//
-//void Logger::get_timefmt(const string& timefmt) {
-//  // get the time format for ths logger (safe)
-//  //
-//  lock_guard<mutex> lock(logspace::logmutex);
-//
-//  return timeformat;
-//}
-
-void Logger::set_timefmt(const string& timefmt) {
-  // set the time format for ths logger (safe)
-  //
-  lock_guard<mutex> lock(logspace::logmutex);
-
-  timeformat = timefmt;
-}
-  
-/*
-void Logger::get_recfmt(const string& recfmt) {
-  // get the time format for ths logger (safe)
-  //
-  lock_guard<mutex> lock(logspace::logmutex);
-
-  return recordformat;
-}
-*/
-  
-void Logger::set_recfmt(const string& recfmt) {
-  // set the time format for ths logger (safe)
-  //
-  lock_guard<mutex> lock(logspace::logmutex);
-
-  recordformat = recfmt;
-}
-  
-string Logger::level_to_string(int level, bool uppercase) {
-  switch (level) {
-    case NOTSET:   return uppercase ? "UNSET"    : "unset";
-    case DEBUG:    return uppercase ? "DEBUG"    : "debug";
-    case INFO:     return uppercase ? "INFO"     : "info";
-    case WARNING:  return uppercase ? "WARNING"  : "warning";
-    case ERROR:    return uppercase ? "ERROR"    : "error";
-    case CRITICAL: return uppercase ? "CRITICAL" : "critical";
-    default:       return uppercase ? "UNKNOWN"  : "unknown";
-  }
-}
-
-string Logger::format_tid() {
-  // Thread id formatting
-  //
-  char tids[64];
-  tids[0] = '\0';
-  //
-  snprintf(tids, sizeof(tids), "%x",
-         (unsigned int) hash<thread::id>()(this_thread::get_id()));
-
-  return string(tids);
-}
-
-string Logger::format_pid() {
-  // pid formatting
-  //
-  char pids[64];
-  pids[0] = '\0';
-
-  snprintf(pids, sizeof(pids), "%i", getpid());
-
-  return string(pids);
-}
-
-string Logger::format_ppid() {
-  // Parent pid formatting
-  //
-  char ppids[64];
-  ppids[0] = '\0';
-
-  snprintf(ppids, sizeof(ppids), "%i", getppid());
-
-  return string(ppids);
-}
-
-void Logger::format_time(string& timestr, const char* timefmt) {
-  //   Get current timestamp
-  //
-  char timestamp[64];
-  time_t now = time(0);
-  tm* timeinfo = localtime(&now);
-
-  if (strftime(timestamp, sizeof(timestamp), timefmt, timeinfo) == 0)
-    strncpy(timestamp, "time fmt error", sizeof(timestamp));
-
-  timestr = string(timestamp);
-}
-
-void Logger::format_message(string& msgstr, const char* msgfmt, va_list vl) {
-  // Message formatting
-  // note that long messages get truncated to 1023 one-byte characters
-  // (less if UTF-8 multi-byte characters are present)
-  //
-  char msg[1024];
-  if (vsnprintf(msg, sizeof(msg), msgfmt, vl) < 0)
-    snprintf(msg, sizeof(msg), "logging error: %s", strerror(errno));
-
-  msgstr = string(msg);
-}
-
-void Logger::format_record(string& record,
-                           const char* timefmt,
-                           const char* recfmt,
-                           string& message,
-                           string& name, int level) {
-  //
-  string timestamp;
-  format_time(timestamp, timefmt);
-  string format = recfmt;
-
-  // the final record formatting
-  //
-  auto s_append = [](string& r, const string& s, size_t max) {
-                                if (r.size() > max)
-                                  r.resize(max);
-                                else if (r.size() < max)
-                                  r += s.substr(0, max - r.size()); };
-  auto c_append = [](string& r, const char c) { if (r.size() < 4)
-                                                  r += c; };
-  string pending;
-
-  size_t i = 0;
-  while(i < format.size()) {
-    char c = format[i++];
-    c_append(pending, c);
-
-    if (i >= format.size() or c != '%') {
-      s_append(record, pending, MAX_RECORD_LENGTH);
-      pending.clear();
-      continue;
-    }
-
-    c = format[i++];
-    c_append(pending, c);
-
-    bool append_colon = false;
-    bool uppercase    = false;
-
-    switch(c) {
-      case 't':
-      case 'T':
-                 s_append(record, timestamp, MAX_RECORD_LENGTH);
-                 break;
-      case 'N':  
-                 if (name.size() > 0)
-                   append_colon = true; 
-      case 'n':
-                 s_append(record, name, MAX_RECORD_LENGTH);
-                 if (append_colon)
-                   record += ": ";
-                 break;
-      case 'I':
-                 if (this_thread::get_id() != logspace::main_thread_id)
-                   s_append(record, "(" + format_tid() + ") ", MAX_RECORD_LENGTH);
-                 break;
-      case 'i':
-                 s_append(record, format_tid(), MAX_RECORD_LENGTH);
-                 break;
-      case 'P':
-                 s_append(record, format_ppid(), MAX_RECORD_LENGTH);
-                 break;
-      case 'p':
-                 s_append(record, format_pid(), MAX_RECORD_LENGTH);
-                 break;
-      case 'L':
-                 uppercase = true;
-      case 'l':
-                 s_append(record, level_to_string(level, uppercase), MAX_RECORD_LENGTH);
-                 break;
-      case 'M':
-      case 'm':
-                 s_append(record, message, MAX_RECORD_LENGTH);
-                 break;
-      case '%':
-                 s_append(record, "%", MAX_RECORD_LENGTH);
-                 break;                 
-      default:
-                 s_append(record, pending, MAX_RECORD_LENGTH);
-                 break;
-    }
-    pending.clear();
-  }
-  s_append(record, pending, MAX_RECORD_LENGTH);
-}    
-
 void Logger::logaux(int level, const char* format, va_list vl) {
+  string record;
   string message;
   Logger* instance;
 
@@ -714,31 +669,32 @@ void Logger::logaux(int level, const char* format, va_list vl) {
 
   // Message formatting
   //
-  format_message(message, format, vl);
+  message = formatter->format_message(format, vl);
 
   instance = this;
   while (instance) {
     string record;
-    // safe reads protected by mutex
-    const char* timefmt = instance->timeformat.c_str();
-    const char* recfmt = instance->recordformat.c_str();
 
     // Record formatting as a log message wrapper
     // retain original 'level' and 'modname' values across potential loggers
     //
-    format_record(record, timefmt, recfmt, message, modname, level);
+    record = instance->formatter->format_record(message, modname, level);
 
     if (level >= instance->loglevel) {
       // log to stream if configured
       //
       if (instance->outstream) {
-        *instance->outstream << record << endl;
+        *instance->outstream << record;
+        if (instance->formatter->eol)
+          *instance->outstream << endl;
       }
 
       // log to log file if open
       //
       if (instance->logfile.is_open()) {
-        instance->logfile << record << endl;
+        instance->logfile << record;
+        if (instance->formatter->eol)
+          instance->logfile << endl;
         instance->logfile.flush();
       }
     }
