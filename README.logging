@@ -6,43 +6,60 @@ A basic logging interface
 
 */
 
-///////////////////////////// A basic logging facility 
+///////////////////////////// 
+//
+// A basic logging facility modelled upon the "logging" Python module
 //
 ///////////// Introduction to the user interface
 //
-// Access to all interface methods through a reference to
+// Access to all interface methods through a tiny object containing
+// only a smart pointer to the actual logger
+// The smart pointer returned in the Logger is always the same for
+// a logger of name "name"
+//
 // the Logger and Formatter classes
 //
-//   Logger& logger = Logger::get_logger("name")  // logger for entitity "name" 
+//   Logger logger = Logger::get_logger("name")  // logger for entitity "name" 
+//   Logger root_logger = Logger::get_logger()   // the root logger
 //
-//   or using existing type   "typedef logref_t Logger&"
+//   Formatter Formatter::get_formatter(time_format=DEFAULT_TIMEFMT,
+//                                      record_format=DEFAULT_RECORDFMT,
+//                                      end_of_line=true)
 //
-//   logref_t logger = Logger::get_logger("name")
 //
+///////////// LoggerTree class
+//
+// LoggerTree objects are internal loggers with all the attributes required to
+// create and mantain a logging hierarchy
+// LoggerTree instances are opaque to the user and are accessible only through
+// loggers, which are 'views' into the logger tree hierarchy
+
 ///////////// Logger class
 //
 // Logger instances are dynamic objects built internally using smart pointers
 // for efficient memory management
-// Formatter instances are member of the Logger class and are responsible for
-// the final output aspect of logging records
+// Formatter instances can be members of the Logger class and are responsible
+// for the final output layout of logging records
 //
-// Logger and Formatter clases offer a reference based user interface
 // Module duration is tied to storage duration of the returned (smart) pointer
+// within loggers
 // Loggers get instantiated using a factory function (get_logger(module))
 // Loggers form a hierarchy. There is a 'root' Logger that gets instantiated
-// automatically and can be modified using the empty string ("") as module name.
+// automatically and can be modified later
 // Once a logger is out of scope, the object pointed to is destroyed and the
 // instance tree is rebuilt
 //
 // User interface
 //
-//   logger creation:
+//   logger creation through static factory functions:
 //
-//     Logger& logger = Logger::get_logger(const string& name,
-//                                         int level,      // optional         
-//                                         int streamer)   // optional
+//     Logger logger = Logger::get_logger(const string& name,
+//                                        int level,      // optional         
+//                                        int streamer)   // optional
 //
-//         - the special value "" for name specifies the root logger
+//     Logger logger = Logger::get_logger(int level,      // optional         
+//                                        int streamer)   // optional
+//
 //         - level is the log level and can be one of:
 //               NOTSET, DEBUG, INFO, WARNING, ERROR, CRITICAL, UNCHANGED
 //           the special value of NOTSET prevents any logging output
@@ -52,7 +69,7 @@ A basic logging interface
 //
 //  formatter creation:
 //
-//    Formatter& formatter = Formatter::get_formatter(
+//    Formatter formatter = Formatter::get_formatter(
 //                             const string& recfmt,    // optional
 //                             const string& timefmt,   // optional
 //                             bool eol)                // optional
@@ -75,13 +92,13 @@ A basic logging interface
 //  public logger methods:
 //
 //    - Factory functions for instatiating the class
-//        static logref_t Logger::get_logger(const string& module,
+//        static Logger Logger::get_logger(const string& module,
 //                          int level=UNCHANGED, int stream=UNCHANGED)
 //    - Naming
 //        void Logger::set_alias(const string& module)
 //    - Formatter handling
-//        fmtref_t Logger::get_formatter()
-//        void Logger::set_formatter(fmtref_t ref_formatter)
+//        Formatter& Logger::get_formatter()
+//        void Logger::set_formatter(Formatter& ref_formatter)
 //    - Message dispatch
 //        void Logger::log(int level, const char* format, ...)
 //        void Logger::autolog(int level, const char* format, ...)
@@ -93,6 +110,7 @@ A basic logging interface
 //    - Get/set current log level
 //        int Logger::get_loglevel()
 //        int Logger::set_loglevel(int level)
+//        int Logger::get_effective_loglevel()
 //    - Select log file and streamer
 //        int Logger::set_logfile(const string& fname)
 //        ostream* Logger::get_streamer()
@@ -107,7 +125,7 @@ A basic logging interface
 //  public logger methods:
 //
 //    - Factory functions for instantiating the class
-//        static fmtref_t Formatter::get_formatter(
+//        static Formatter Formatter::get_formatter(
 //                                  const string& recfmt = DEFAULT_RECORDFMT,
 //                                  const string& timefmt = DEFAULT_TIMEFMT,
 //                                  bool eol = true)
@@ -119,8 +137,8 @@ A basic logging interface
 //
 //  one can create logger hierarchies using names separated by '.'
 //
-//      logref_t logger = Logger::get_logger("myapp", WARNING, STDLOG);
-//      logref_t logger = Logger::get_logger("myapp.util", DEBUG, STDERR);
+//      Logger logger = Logger::get_logger("myapp", WARNING, STDLOG);
+//      Logger logger = Logger::get_logger("myapp.util", DEBUG, STDERR);
 //
 //  in such a case, records created by 'myapp.util' will be logged at
 //  'myapp.util' and 'myapp' level, with the corresponding level and stream
@@ -131,35 +149,35 @@ A basic logging interface
 //
 //    using default formatting
 //
-//      logref_t logger = Logger::get_logger("myapp", WARNING, STDLOG);
-//      logger.log(ERROR, "I have a strong pain in my %s", "head");
+//      Logger logger = Logger::get_logger("myapp", WARNING, STDLOG);
+//      logger.error("I have a strong pain in my %s", "head");
 //      
 //    using a specific formatter
 //
-//      logref_t logger = Logger::get_logger("myapp", WARNING, STDLOG);
-//      fmtref_t formatter = Formatter::get_formatter("%t (%i) [%l] %n %m");
+//      Logger logger = Logger::get_logger("myapp", WARNING, STDLOG);
+//      Formatter formatter = Formatter::get_formatter("%t (%i) [%l] %n %m");
 //      logger.set_formatter(formatter);
 //      logger.log(ERROR, "I have a strong pain in my %s", "head");
 //
-///////////// logspace namespace
+///////////// logging namespace
 //
-// Non-local variables are kept in a separate namespace (logspace)
+// Non-local variables are kept in a separate namespace (logging)
 // Those include the main thread of execution and various mutexes
 //
 //   Identifies the default thread of execution
 //   Must get initialized before any thread is launched
 //
-//     logspace::main_thread_id = this_thread::get_id()
+//     logging::main_thread_id = this_thread::get_id()
 //
 //   Flag to allow debugging of internal operations using regular loggers
 //
-//     logspace::autolog
+//     logging::autolog
 //
 //   Mutexes are placed in a separate namespace
 //   Must last until other dynamic objects are destroyed
 //
-//     logspace::treemutex   protect logger tree operations
-//     logspace::filemutex   protect file and stream operations
-//     logspace::logmutex    protect message creation and delivery
-//     logspace::fmtmutex    protect formatter creation and manipulation
+//     logging::treemutex   protect logger tree operations
+//     logging::filemutex   protect file and stream operations
+//     logging::logmutex    protect message creation and delivery
+//     logging::fmtmutex    protect formatter creation and manipulation
 //

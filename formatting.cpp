@@ -14,24 +14,69 @@ Formatter::Formatter(const string& recfmt, const string& timefmt, bool eol) :
                          recordformat(recfmt),
                          timeformat(timefmt),
                          eol(eol),
-                         modifiable(false)           {}
+                         fmtptr(nullptr) {}
 
 Formatter::~Formatter() {}
 
 // Factory for creating formatters
 //
-fmtref_t Formatter::get_formatter(const string& recfmt, const string& timefmt, bool eol) {
+Formatter Formatter::get_formatter(const string& recfmt,
+                                   const string& timefmt,
+                                   bool eol) {
+  // Formatters are anonymous abjects
+  //
+  Formatter fmt;
+  //
+  fmtptr_t formatter(new Formatter(recfmt, timefmt, eol));
 
-  fmtptr_t formatptr(new Formatter(recfmt, timefmt, eol));
-  formatptr->modifiable = true;
-  formatptr->fmtptr     = formatptr;
+  fmt = *(formatter.get());
+  fmt.fmtptr = formatter;
 
-  return *(formatptr.get());
+  return fmt;
 }
 
+string Formatter::get_timefmt() {
+  // get the time format for this logger (safe)
+  //
+  lock_guard<mutex> lock(logging::logmutex);
+
+  return timeformat;
+}
+  
+void Formatter::set_timefmt(const string& timefmt) {
+  // set the time format for this logger (safe)
+  //
+  lock_guard<mutex> lock(logging::logmutex);
+
+  timeformat = string(timefmt);
+}
+  
+string Formatter::get_recfmt() {
+  // get the time format for ths logger (safe)
+  //
+  lock_guard<mutex> lock(logging::logmutex);
+
+  return recordformat;
+}
+  
+void Formatter::set_recfmt(const string& recfmt) {
+  // set the time format for ths logger (safe)
+  //
+  lock_guard<mutex> lock(logging::logmutex);
+
+  recordformat = string(recfmt);
+}
+  
+void Formatter::set_eol(const bool new_eol) {
+  // end of line setting (safe)
+  //
+  lock_guard<mutex> lock(logging::logmutex);
+
+  eol = new_eol;
+}
+  
 // Log record formatting functions
 //
-
 string Formatter::level_to_string(int level, bool uppercase) {
   switch (level) {
     case NOTSET:   return uppercase ? "UNSET"    : "unset";
@@ -44,33 +89,6 @@ string Formatter::level_to_string(int level, bool uppercase) {
   }
 }
 
-void Formatter::set_timefmt(const string& timefmt) {
-  // set the time format for this logger (safe)
-  //
-  lock_guard<mutex> lock(logspace::logmutex);
-
-  if (modifiable)
-    timeformat = timefmt;
-}
-  
-void Formatter::set_recfmt(const string& recfmt) {
-  // set the time format for ths logger (safe)
-  //
-  lock_guard<mutex> lock(logspace::logmutex);
-
-  if (modifiable)
-    recordformat = recfmt;
-}
-  
-void Formatter::set_eol(const bool new_eol) {
-  // end of line setting (safe)
-  //
-  lock_guard<mutex> lock(logspace::logmutex);
-
-  if (modifiable)
-    eol = new_eol;
-}
-  
 string Formatter::format_tid() {
   // Thread id formatting
   //
@@ -178,7 +196,7 @@ string Formatter::format_record(string& message, string& name, int level) {
                    record += ": ";
                  break;
       case 'I':
-                 if (this_thread::get_id() != logspace::main_thread_id)
+                 if (this_thread::get_id() != logging::main_thread_id)
                    s_append(record, "(" + format_tid() + ") ", MAX_RECORD_LENGTH);
                  break;
       case 'i':

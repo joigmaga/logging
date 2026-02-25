@@ -39,13 +39,12 @@
 #define DEFAULT_TIMEFMT   "%Y/%m/%d:%H:%M:%S"
 #define DEFAULT_RECORDFMT "%t %I[%l] %N%m"
 
-// The logger class
-// 
-
-namespace logspace {
+namespace logging {
   static std::thread::id main_thread_id = std::this_thread::get_id();
   //
-  static bool autolog = false;
+  static bool autolog = true;
+  static int autolevel = DEBUG;
+  static int autostream = STDERR;
   //
   static std::mutex treemutex;
   static std::mutex filemutex;
@@ -53,61 +52,40 @@ namespace logspace {
   static std::mutex fmtmutex;
 }
 
-class Logger;
+// The loggerTree and Formatter class
+// 
+class LoggerTree;
 class Formatter;
 
-typedef std::shared_ptr<Logger>     logptr_t;
-typedef Logger& logref_t;
+typedef std::shared_ptr<LoggerTree>     logptr_t;
+typedef LoggerTree&                     logref_t;
 
 typedef std::shared_ptr<Formatter>  fmtptr_t;
-typedef Formatter& fmtref_t;
+typedef Formatter&                  fmtref_t;
 
 class Logger {
   private:
-    // local typedefs
-    //
-    typedef std::weak_ptr<Logger>   logwptr_t;
-    // Private constructors prevent instantiation from outside the class
-    //
-  protected:
+    // members
+    logptr_t       treeptr;      // internal object
+    // Constructor
+    Logger();
     Logger(const std::string& module);
-    //
-    std::string   modname;      // Module name
-    std::string   alias;        // Module name alias
-    int           loglevel;     // Current log level
-    std::ofstream logfile;      // File stream for the log file
-    std::string   filename;     // Active log file
-    std::ostream* outstream;    // Pointer to output stream
-    fmtptr_t      formatter;    // Pointer to formatter 
-    bool          propagate;    // Continue the search upwards to the root
-    logptr_t      parent;       // logger's ancestor
-    std::map<std::string, logwptr_t> dict;      // Loggers Dictionary
-    // logger creation (internal)
-    static logptr_t get_root_logger();
-    static logptr_t get_regular_logger(const std::string& module);
-    // Formatter manipulation using pointers (internal)
-    fmtptr_t get_formatter_ptr();
-    void set_formatter_ptr(fmtptr_t formatter_ptr);
-    // logging record creation
-    void logaux(int level, const char* format, va_list args);
   public:
-    //
+    // destructor
     ~Logger();
-    // Prevent copying (note: delete functions are a C++11 feature)
-    Logger(Logger const&)         = delete;   // copy
-    void operator=(Logger const&) = delete;   // assignment
+    // Default copy constructor required for Logger creation and passing
+    Logger(Logger const&) = default;
+    // Prevent assignment (note: delete functions are a C++11 feature)
+    Logger& operator=(Logger const&) = default;
     // Factory functions for instatiating the class
-    // new logger reference
-    static logref_t get_logger(const std::string& module,
+    static Logger get_logger(int level=UNCHANGED, int stream=UNCHANGED);
+    static Logger get_logger(const std::string& module,
                                int level=UNCHANGED, int stream=UNCHANGED);
-    // Naming
-    void set_alias(const std::string& module);
     // Formatter handling
     fmtref_t get_formatter();
-    void set_formatter(fmtref_t ref_formatter);
+    void add_formatter(fmtref_t ref_formatter);
     // Message dispatch
     void log(int level, const char* format, ...);
-    void autolog(int level, const char* format, ...);
     void critical(const char* format, ...);
     void error(const char* format, ...);
     void warning(const char* format, ...);
@@ -116,6 +94,7 @@ class Logger {
     // Get/set current log level
     int get_loglevel();
     int set_loglevel(int level);
+    int get_effective_loglevel();
     // Select log file and streamer
     int set_logfile(const std::string& fname);
     std::ostream* get_streamer();
@@ -126,6 +105,51 @@ class Logger {
     // Auto log
     static bool get_autolog();
     static bool set_autolog(bool mode);
+    static bool set_autolog_level(int level);
+    static bool set_autolog_streamer(int stream);
+};
+    
+class LoggerTree {
+  private:
+    // local typedefs
+    //
+    typedef std::weak_ptr<LoggerTree>   logwptr_t;
+    // Private constructors prevent instantiation from outside the class
+    //
+  protected:
+    // members
+    std::string    modname;      // Module name
+    bool           isroot;       // Identifies root logger
+    int            loglevel;     // Current log level
+    std::ofstream* logfile;      // File stream for the log file
+    std::string    filename;     // Active log file
+    std::ostream*  outstream;    // Pointer to output stream
+    fmtptr_t       formatter;    // Pointer to formatter 
+    bool           propagate;    // Continue the search upwards to the root
+    logptr_t       parent;       // logger's ancestor
+    std::map<std::string, logwptr_t> dict;      // Loggers Dictionary
+    // Constructor
+    LoggerTree();
+    LoggerTree(const std::string& module);
+    // logger creation (internal)
+    static logptr_t get_root_logger();
+    static logptr_t get_logger_internal(bool is_root,
+                                        const std::string& module);
+    // Formatter manipulation using pointers (internal)
+    static fmtptr_t get_def_formatter();
+    // logging record creation
+    int get_effective_loglevel();
+    void autolog(int level, const char* format, ...);
+    void logaux(int level, const char* format, va_list args);
+  public:
+    //
+    ~LoggerTree();
+    // Default copy constructor required for Logger creation and passing
+    LoggerTree(LoggerTree const&) = default;
+    // Prevent assignment (note: delete functions are a C++11 feature)
+    LoggerTree& operator=(LoggerTree const&) = default;
+    //
+    friend class Logger;
 };
 
 // The Formatter class
@@ -146,8 +170,8 @@ class Formatter {
     std::string   recordformat; // Output log record format
     std::string   timeformat;   // Output Time format
     bool          eol;          // Append LF to record
-    bool          modifiable;   // Can be changed?
-    fmtwptr_t     fmtptr;       // self pointer
+    fmtptr_t      fmtptr;       // internal pointer used by external view
+    //
     // Formatting
     //
     static std::string level_to_string(int level, bool uppercase=false);
@@ -162,18 +186,22 @@ class Formatter {
     //
     ~Formatter();
     // Prevent copying (note: delete functions are a C++11 feature)
-    Formatter(Formatter const&)      = delete;   // copy
-    void operator=(Formatter const&) = delete;   // assignment
+    Formatter(Formatter const&)            = default;   // copy constructor
+    Formatter& operator=(Formatter const&) = default;   // assignment
     //
+    friend class LoggerTree;
     friend class Logger;
     //
     // Factory functions for instantiating the class
-    static fmtref_t get_formatter(const std::string& recfmt = DEFAULT_RECORDFMT,
-                                  const std::string& timefmt = DEFAULT_TIMEFMT,
-                                  bool eol = true);
+    static Formatter get_formatter(
+                            const std::string& recfmt = DEFAULT_RECORDFMT,
+                            const std::string& timefmt = DEFAULT_TIMEFMT,
+                            bool eol = true);
     //
     // Formatter settings
+    std::string get_timefmt();
     void set_timefmt(const std::string& timefmt);
+    std::string get_recfmt();
     void set_recfmt(const std::string& recfmt);
     void set_eol(const bool eol);
 };

@@ -8,7 +8,7 @@ LDFLAGS       := -pthread
 
 # what to do
 
-SOURCES	        := logging.cpp formatting.cpp
+SOURCES	        := logging.cpp formatting.cpp handling.cpp
 OBJECTS	        := ${SOURCES:.cpp=.o} 
 
 PROGRAMS        := test test2 copytest tt thr
